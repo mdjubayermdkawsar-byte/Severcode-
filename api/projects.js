@@ -1,21 +1,21 @@
+const GITHUB_USERNAME = "mdjubayermdkawsar-byte";
+const GITHUB_REPO = "Severcode-";
+const GITHUB_TOKEN = "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";
+
+const headers = {
+  'Authorization': `token ${GITHUB_TOKEN}`,
+  'Accept': 'application/vnd.github.v3+json',
+  'User-Agent': 'Vercel-Vault-Admin'
+};
+
 module.exports = async (req, res) => {
-  const GITHUB_USERNAME = process.env.GH_USERNAME;
-  const GITHUB_REPO = process.env.GH_REPO;
-  const GITHUB_TOKEN = process.env.GH_TOKEN;
-
-  const headers = {
-    'Authorization': `token ${GITHUB_TOKEN}`,
-    'Accept': 'application/vnd.github.v3+json',
-    'User-Agent': 'Vercel-Vault-Admin'
-  };
-
   if (req.method === 'GET') {
-    // ডাটাবেস বা ইন্ডেক্স ফাইল আনা
+    // ইন্ডেক্স ডাটা ফেচ করা
     try {
-      const dbRes = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/vault_index.json?ref=main`, { headers });
+      const dbRes = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/vault_index.json?ref=main&_t=${Date.now()}`, { headers });
       if (dbRes.status === 404) return res.json({ projects: [] });
       const data = await dbRes.json();
-      const content = Buffer.from(data.content, 'base64').toString('utf8');
+      const content = Buffer.from(data.content.replace(/\s/g, ''), 'base64').toString('utf8');
       return res.json(JSON.parse(content));
     } catch (e) {
       return res.json({ projects: [] });
@@ -26,48 +26,52 @@ module.exports = async (req, res) => {
     try {
       const { action, projectName, fileName, fileContent } = req.body;
 
-      // ১. ইন্ডেক্স ডাটা আনা
+      // ১. বর্তমান ইন্ডেক্স ডাটা আনা
       let dbData = { projects: [] };
       let sha = null;
-      const getIndex = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/vault_index.json?ref=main`, { headers });
+      const getIndex = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/vault_index.json?ref=main&_t=${Date.now()}`, { headers });
       if (getIndex.ok) {
         const d = await getIndex.json();
         sha = d.sha;
-        dbData = JSON.parse(Buffer.from(d.content, 'base64').toString('utf8'));
+        dbData = JSON.parse(Buffer.from(d.content.replace(/\s/g, ''), 'base64').toString('utf8'));
       }
 
-      // ২. নতুন প্রজেক্ট তৈরি
+      // ২. নতুন প্রজেক্ট তৈরি করা
       if (action === 'create_project') {
         if (!dbData.projects.find(p => p.name === projectName)) {
           dbData.projects.push({ name: projectName, files: [] });
         }
       }
 
-      // ৩. ফাইলে কোড সেভ
+      // ৩. ফাইলে কোড সেভ করা
       if (action === 'save_file') {
         const filePath = `vault/${projectName}/${fileName}`;
         
-        // ফাইলটির পূর্বের SHA চেক
         let fileSha = null;
-        const checkF = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/${filePath}?ref=main`, { headers });
+        const checkF = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/${filePath}?ref=main&_t=${Date.now()}`, { headers });
         if (checkF.ok) {
           const fd = await checkF.json();
           fileSha = fd.sha;
         }
 
-        // ফাইল সেভ
-        await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/${filePath}`, {
+        // গিটহাবে ফাইলটি সেভ বা আপডেট করা
+        const saveRes = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/${filePath}`, {
           method: 'PUT',
           headers: { ...headers, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: `Update ${filePath}`,
-            content: Buffer.from(fileContent).toString('base64'),
+            content: Buffer.from(fileContent, 'utf8').toString('base64'),
             sha: fileSha || undefined,
             branch: "main"
           })
         });
 
-        // ইন্ডেক্সে যুক্ত করা
+        if (!saveRes.ok) {
+          const err = await saveRes.json().catch(() => ({}));
+          throw new Error(err.message || "Failed to save file on GitHub");
+        }
+
+        // প্রজেক্টের লিস্টে ফাইলের নাম না থাকলে যুক্ত করা
         let proj = dbData.projects.find(p => p.name === projectName);
         if (!proj) {
           proj = { name: projectName, files: [] };
@@ -78,13 +82,13 @@ module.exports = async (req, res) => {
         }
       }
 
-      // ৪. ইন্ডেক্স ফাইল আপডেট করা
+      // ৪. ইন্ডেক্স ফাইলটি গিটহাবে সিঙ্ক করা
       await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${GITHUB_REPO}/contents/vault_index.json`, {
         method: 'PUT',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: "Sync vault index",
-          content: Buffer.from(JSON.stringify(dbData, null, 2)).toString('base64'),
+          content: Buffer.from(JSON.stringify(dbData, null, 2), 'utf8').toString('base64'),
           sha: sha || undefined,
           branch: "main"
         })
